@@ -1,0 +1,44 @@
+{"time": "2026-04-21T08:59:01.998284", "event": "chat_message", "payload": {"user_id": "test-user"}}
+{"time": "2026-04-21T09:05:14.743995", "event": "auto_plan", "payload": {"user_id": "test-user", "goal": "帮我自动生成一个30秒反转短剧，重生逆袭爽文，大女主，校园主题"}}
+{"time": "2026-04-21T09:05:42.900099", "event": "auto_plan", "payload": {"user_id": "test-user", "goal": "短剧大纲\n题材：帮我自动生成一个30秒反转短剧，重生逆袭爽文，大女主，校园主题\n风格：甜宠\n时长：60分钟\n关键词：无\n风格提示：高糖互动、误会化解、情感升温"}}
+{"time": "2026-04-22T02:45:07.951479", "event": "auto_plan", "payload": {"user_id": "test-user", "goal": "帮我自动生成一个30秒反转短剧，重生逆袭爽文，大女主，校园主题"}}
+{"time": "2026-04-22T02:45:46.634414", "event": "auto_plan", "payload": {"user_id": "test-user", "goal": "帮我跟据这个大纲写剧本"}}
+{"time": "2026-04-22T03:00:30.819472", "event": "auto_plan", "payload": {"user_id": "test-user", "goal": "帮我自动生成一个30秒反转短剧，重生逆袭爽文，大女主，校园主题"}}
+{"time": "2026-04-22T03:00:47.677776", "event": "auto_plan", "payload": {"user_id": "test-user", "goal": "生成剧本"}}
+{"time": "2026-04-22T03:23:44.802279", "event": "auto_plan", "payload": {"user_id": "test-user", "goal": "帮我自动生成一个30秒反转短剧，重生逆袭爽文，大女主，校园主题"}}
+{"time": "2026-04-22T03:24:01.329552", "event": "auto_plan", "payload": {"user_id": "test-user", "goal": "帮我自动生成一个30秒反转短剧剧本，重生逆袭爽文，大女主，校园主题"}}
+{"time": "2026-04-22T03:24:11.128715", "event": "auto_plan", "payload": {"user_id": "test-user", "goal": "生成脚本"}}
+{"time": "2026-04-22T03:27:26.602907", "event": "auto_plan", "payload": {"user_id": "test-user", "goal": "帮我自动生成一个30秒反转短剧剧本，重生逆袭爽文，大女主，校园主题"}}
+{"time": "2026-04-22T03:32:21.466941", "event": "auto_plan", "payload": {"user_id": "test-user", "goal": "帮我自动生成一个30秒反转短剧剧本，重生逆袭爽文，大女主，校园主题"}}
+{"time": "2026-04-22T03:40:29.196421", "event": "auto_plan", "payload": {"user_id": "test-user", "goal": "帮我自动生成一个30秒反转短剧剧本，霸道总裁类的，女生向"}}
+{"time": "2026-04-22T03:51:40.058342", "event": "auto_plan", "payload": {"user_id": "test-user", "goal": "帮我自动生成一个30秒反转短剧剧本，能听见别人心声，末世主题"}}
+{"time": "2026-04-22T04:31:58.074844", "event": "auto_plan", "payload": {"user_id": "test-user", "goal": "帮我自动生成一个30秒反转短剧剧本，重生逆袭爽文，大女主，校园主题"}}
+{"time": "2026-04-22T04:33:15.631900", "event": "auto_plan", "payload": {"user_id": "test-user", "goal": "根据这个剧本生成脚本"}}
+{"time": "2026-04-22T04:51:39.242943", "event": "auto_plan", "payload": {"user_id": "test-user", "goal": "帮我自动生成一个30秒反转短剧剧本，重生逆袭爽文，大女主，校园主题"}}
+{"time": "2026-04-22T04:52:32.348251", "event": "chat_message", "payload": {"user_id": "test-user"}}
+{"time": "2026-04-22T04:56:40.383250", "event": "auto_plan", "payload": {"user_id": "test-user", "goal": "帮我自动生成一个30秒反转短剧，重生逆袭爽文，大女主，校园主题"}}
+{"time": "2026-04-22T04:57:18.721923", "event": "chat_message", "payload": {"user_id": "test-user"}}
+{"time": "2026-04-22T05:00:02.499626", "event": "auto_plan", "payload": {"user_id": "test-user", "goal": "帮我自动生成一个30秒反转短剧，重生逆袭爽文，大女主，校园主题"}}
+{"time": "2026-04-22T05:00:54.616541", "event": "chat_message", "payload": {"user_id": "test-user"}}
+{"time": "2026-04-22T05:06:00.517543", "event": "auto_plan", "payload": {"user_id": "test-user", "goal": "帮我自动生成一个30秒反转短剧，重生逆袭爽文，大女主，校园主题"}}
+{"time": "2026-04-22T05:07:47.975419", "event": "chat_message", "payload": {"user_id": "test-user"}}
+{"time": "2026-04-22T05:13:23.746991", "event": "auto_plan", "payload": {"user_id": "test-user", "goal": "帮我自动生成一个30秒反转短剧，重生逆袭爽文，大女主，校园主题"}}
+{"time": "2026-04-22T05:14:24.509998", "event": "chat_message", "payload": {"user_id": "test-user"}}
+{"time": "2026-04-22T05:34:15.896071", "event": "auto_plan", "payload": {"user_id": "test-user", "goal": "帮我自动生成一个30秒反转短剧，重生逆袭爽文，大女主，校园主题"}}
+{"time": "2026-04-22T05:35:44.047329", "event": "chat_message", "payload": {"user_id": "test-user"}}
+{"time": "2026-04-22T05:39:18.954495", "event": "auto_plan", "payload": {"user_id": "test-user", "goal": "帮我把这个剧本改写得更爽文一点，帮我生成这个剧本的标题"}}
+{"time": "2026-04-24T05:24:24.893975", "event": "upload_doc", "payload": {"file_name": "短剧剧本.docx", "chunks": 3, "user_id": "test-user"}}
+{"time": "2026-04-24T05:25:59.467909", "event": "auto_plan", "payload": {"user_id": "test-user", "goal": "优化这个我给你的这个短剧剧本"}}
+{"time": "2026-04-24T05:34:49.885819", "event": "upload_doc", "payload": {"file_name": "短剧剧本.docx", "chunks": 3, "user_id": "test-user"}}
+{"time": "2026-04-24T05:36:13.941601", "event": "chat_message", "payload": {"user_id": "test-user"}}
+{"time": "2026-04-24T05:42:37.604368", "event": "upload_doc", "payload": {"file_name": "短剧剧本.docx", "chunks": 3, "user_id": "test-user"}}
+{"time": "2026-04-24T05:43:35.249982", "event": "chat_message", "payload": {"user_id": "test-user"}}
+{"time": "2026-04-24T05:50:32.816225", "event": "upload_doc", "payload": {"file_name": "短剧剧本.docx", "chunks": 3, "user_id": "test-user"}}
+{"time": "2026-04-24T05:52:17.171271", "event": "chat_message", "payload": {"user_id": "test-user"}}
+{"time": "2026-04-24T05:54:23.030768", "event": "chat_message", "payload": {"user_id": "test-user"}}
+{"time": "2026-04-24T05:56:53.107458", "event": "upload_doc", "payload": {"file_name": "赵文熙的简历.pdf", "chunks": 2, "user_id": "test-user"}}
+{"time": "2026-04-24T05:58:07.419781", "event": "chat_message", "payload": {"user_id": "test-user"}}
+{"time": "2026-04-24T06:05:45.323042", "event": "chat_message", "payload": {"user_id": "test-user"}}
+{"time": "2026-04-24T06:17:30.233414", "event": "chat_message", "payload": {"user_id": "test-user"}}
+{"time": "2026-04-24T06:23:52.529013", "event": "chat_message", "payload": {"user_id": "test-user"}}
+{"time": "2026-04-24T06:24:40.764818", "event": "chat_message", "payload": {"user_id": "test-user"}}
