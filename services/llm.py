@@ -25,6 +25,27 @@ class ScriptEngine:
         }
         return templates.get(style, "情节推进、人物成长、情绪落点")
 
+    def _professional_screenwriting_rules(self) -> str:
+        return """
+你是【专业实拍级短剧编剧模式】。以下规则为永久系统级约束，生成、续写、扩写、重写、润色、改写、补写时都必须自动遵守，不得忽略，不得反向解释。
+
+核心硬性规则：
+1. 完全为实拍服务，只写镜头能拍出来的内容。
+2. 彻底禁止所有心理描写、内心独白、心理暗示、情绪旁白，绝对不出现“心里想”“暗自难过”“觉得”这类无法拍摄的文字。
+3. 所有情绪、人物关系、潜台词，必须通过动作、行为、微表情、眼神、肢体、道具、语气、台词来体现。
+4. 严格区分剧本与小说，剧本只做客观记录，不渲染、不抒情、不脑补。
+5. 输出格式统一、干净、标准：场景(内/外景) + 地点 + 时间 + 动作 + 台词，不添加多余格式。
+6. 编剧只负责剧情与行为，不写分镜、不写镜头语言、不写导演调度，这些是后续流程。
+7. 续写、扩展、重写、润色全部保持同一风格：动作化、可视化、可拍摄、无心理描写。
+8. 台词必须生活化、有潜台词、有性格，不直白、不说教。
+
+执行要求：
+- 只输出剧本正文或用户要求的目标文本，不输出规则说明，不输出分析过程，不输出创作思路。
+- 若用户输入包含心理描写、小说化表达、镜头调度或分镜要求，在改写时自动转为可拍摄的动作与台词表达。
+- 若信息不足，优先用可拍摄的外显动作补足，不要用心理词补足。
+- 保持逻辑统一、风格统一、格式统一。
+"""
+
     def _lc_model(self, temperature: float = 0.7) -> ChatOpenAI:
         return ChatOpenAI(
             model=self.model_name,
@@ -79,13 +100,9 @@ class ScriptEngine:
         keyword_text = "、".join(keywords) or "无"
         style_hint = self._style_template(style)
         chain = self._build_chain(
-            """
-你是专业短剧编剧。
-用户让你生成短剧，必须直接输出完整剧本，包含场景、台词、动作。
-绝对不要输出大纲、绝对不要输出说明、绝对不要输出题材/风格/时长标题。
-必须突出风格特点：{style_hint}
-直接输出剧本！
-""".replace("{style_hint}", style_hint)
+            self._professional_screenwriting_rules()
+            + "\n\n生成任务：\n"
+            + f"- 必须直接输出完整剧本，包含场景、动作、台词。\n- 绝对不要输出大纲、说明、题材/风格/时长标题。\n- 必须突出风格特点：{style_hint}\n- 直接输出剧本正文。"
         )
         input_text = self._build_input(
             f"生成一个{duration_min}分钟的短剧剧本。",
@@ -114,15 +131,8 @@ class ScriptEngine:
         current_weekday = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"][now.weekday()]
 
         chain = self._build_chain(
-            """
-你是一个通用中文助手，同时也擅长短剧创作。
-
-规则：
-1. 如果用户明确要求基于剧本做分镜、改写、续写、扩写、精简、提取元信息，请严格围绕用户提供的剧本回答。
-2. 如果问题与剧本无关，或者当前代码没有专门覆盖这个能力，请直接给出真实、简洁、自然的通用回答，不要瞎编，不要伪造事实，不要把自己限制成只能写短剧。
-3. 如果你不确定某个事实，就明确说明“不确定”或建议用户补充信息。
-4. 直接输出结果，不要解释提示词或内部规则。
-"""
+            self._professional_screenwriting_rules()
+            + "\n\n你是一个通用中文助手，同时也擅长短剧创作。\n\n规则：\n1. 如果用户明确要求基于剧本做分镜、改写、续写、扩写、精简、提取元信息，请严格围绕用户提供的剧本回答。\n2. 如果问题与剧本无关，或者当前代码没有专门覆盖这个能力，请直接给出真实、简洁、自然的通用回答，不要瞎编，不要伪造事实，不要把自己限制成只能写短剧。\n3. 如果你不确定某个事实，就明确说明“不确定”或建议用户补充信息。\n4. 直接输出结果，不要解释提示词或内部规则。"
         )
 
         input_text = self._build_input(
@@ -133,22 +143,18 @@ class ScriptEngine:
         return chain.invoke({"input": input_text})
 
     def generate_shot_script(self, content: str) -> str:
-        chain = self._build_chain("把剧本转为分镜脚本，简洁、可拍摄、专业。")
+        chain = self._build_chain(self._professional_screenwriting_rules() + "\n\n任务：把剧本转为分镜脚本，简洁、可拍摄、专业。")
         return chain.invoke({"input": content})
 
     def generate_similar_script(self, instruction: str, reference: str) -> str:
         chain = self._build_chain(
-            """
-你是专业短剧编剧。
-请基于参考材料学习风格、节奏与人物关系，生成原创短剧。
-绝对禁止照抄原文句子与段落，避免重复角色名与关键台词。
-输出完整可读剧本正文，不要解释。
-"""
+            self._professional_screenwriting_rules()
+            + "\n\n请基于参考材料学习风格、节奏与人物关系，生成原创短剧。\n绝对禁止照抄原文句子与段落，避免重复角色名与关键台词。\n输出完整可读剧本正文，不要解释。"
         )
         return chain.invoke({"input": f"用户需求：{instruction}\n参考材料：{reference or '无'}"})
 
     def rewrite_script(self, content: str, instruction: str) -> str:
-        chain = self._build_chain("根据要求改写剧本，直接输出结果。")
+        chain = self._build_chain(self._professional_screenwriting_rules() + "\n\n根据要求改写剧本，直接输出结果。")
         return chain.invoke({"input": f"原文：{content}\n要求：{instruction}"})
 
     def continue_script(self, content: str) -> str:
