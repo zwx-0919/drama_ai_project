@@ -19,14 +19,16 @@ services:
     restart: unless-stopped
 
   minio:
-    image: minio/minio:latest
+    image: minio/minio:RELEASE.2025-01-20T14-49-07Z
     container_name: drama-minio
     ports:
       - "9000:9000"
       - "9001:9001"
     environment:
       MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin123
+      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_REGION_NAME: us-east-1
+      MINIO_API_CORS_ALLOW_ORIGIN: "*"
     command: server /data --console-address ":9001"
     volumes:
       - minio_data:/data
@@ -50,9 +52,13 @@ services:
       - minio
     environment:
       ETCD_ENDPOINTS: etcd:2379
+      COMMON_STORAGETYPE: minio
       MINIO_ADDRESS: minio:9000
       MINIO_ACCESS_KEY: minioadmin
-      MINIO_SECRET_KEY: minioadmin123
+      MINIO_SECRET_KEY: minioadmin
+      MINIO_USE_SSL: "false"
+      MINIO_REGION_NAME: us-east-1
+      MINIO_BUCKET_NAME: a-bucket
     ports:
       - "19530:19530"
       - "9091:9091"

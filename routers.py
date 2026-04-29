@@ -6,7 +6,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, File, Form, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 
-from api.dependencies import get_agent, get_rag_service, get_script_engine, get_settings_dep
+from api.dependencies import get_agent, get_memory_service, get_rag_service, get_script_engine, get_settings_dep
 from core.audit import AuditLogger
 from core.response import success
 from schemas.script import AutoPlanRequest, ChatRequest, ExportRequest, MetaRequest, ScriptGenerateRequest, ScriptUpdateRequest, ShotGenerateRequest, ToolRequest
@@ -23,6 +23,34 @@ _audit = AuditLogger()
 @health.get("/health")
 def health_check():
     return success({"status": "ok"})
+
+
+@health.get("/health/redis")
+def health_redis(rag: RAGService = Depends(get_rag_service), memory=Depends(get_memory_service)):
+    return success(
+        {
+            "memory": {
+                "enabled": bool(getattr(memory, "_client", None)),
+                "sample_messages": memory.get_messages("test_user")[:2],
+            },
+            "rag": rag.cache_status(),
+        }
+    )
+
+
+@health.get("/health/milvus")
+def health_milvus(rag: RAGService = Depends(get_rag_service)):
+    collection = getattr(rag, "_collection", None)
+    collection_name = getattr(rag, "collection_name", None)
+    return success(
+        {
+            "milvus_enabled": bool(collection is not None),
+            "collection_name": collection_name,
+            "collection_loaded": bool(collection is not None),
+            "embedding_dim": getattr(rag, "embedding_dim", None),
+            "cache_status": rag.cache_status(),
+        }
+    )
 
 
 @script.post("/generate")
@@ -59,91 +87,49 @@ def update_script(req: ScriptUpdateRequest, rag: RAGService = Depends(get_rag_se
 
 @script.post("/rewrite")
 def rewrite_script(req: ToolRequest, agent=Depends(get_agent)):
-    result = agent.execute_tool(
-        user_id=req.user_id,
-        intent="rewrite",
-        instruction=req.instruction,
-        content=req.content or "",
-        script_id=req.script_id,
-    )
+    result = agent.execute_tool(user_id=req.user_id, intent="rewrite", instruction=req.instruction, content=req.content or "", script_id=req.script_id, selected_doc_id=getattr(req, "selected_doc_id", None))
     _audit.log("rewrite_script", {"user_id": req.user_id, "script_id": req.script_id, "instruction": req.instruction})
     return success(result)
 
 
 @script.post("/continue")
 def continue_script(req: ToolRequest, agent=Depends(get_agent)):
-    result = agent.execute_tool(
-        user_id=req.user_id,
-        intent="continue",
-        instruction=req.instruction or "续写后续剧情",
-        content=req.content or "",
-        script_id=req.script_id,
-    )
+    result = agent.execute_tool(user_id=req.user_id, intent="continue", instruction=req.instruction or "续写后续剧情", content=req.content or "", script_id=req.script_id, selected_doc_id=getattr(req, "selected_doc_id", None))
     _audit.log("continue_script", {"user_id": req.user_id, "script_id": req.script_id})
     return success(result)
 
 
 @script.post("/expand")
 def expand_script(req: ToolRequest, agent=Depends(get_agent)):
-    result = agent.execute_tool(
-        user_id=req.user_id,
-        intent="expand",
-        instruction=req.instruction or "扩写并丰富细节",
-        content=req.content or "",
-        script_id=req.script_id,
-    )
+    result = agent.execute_tool(user_id=req.user_id, intent="expand", instruction=req.instruction or "扩写并丰富细节", content=req.content or "", script_id=req.script_id, selected_doc_id=getattr(req, "selected_doc_id", None))
     _audit.log("expand_script", {"user_id": req.user_id, "script_id": req.script_id})
     return success(result)
 
 
 @script.post("/shorten")
 def shorten_script(req: ToolRequest, agent=Depends(get_agent)):
-    result = agent.execute_tool(
-        user_id=req.user_id,
-        intent="shorten",
-        instruction=req.instruction or "精简并保留核心",
-        content=req.content or "",
-        script_id=req.script_id,
-    )
+    result = agent.execute_tool(user_id=req.user_id, intent="shorten", instruction=req.instruction or "精简并保留核心", content=req.content or "", script_id=req.script_id, selected_doc_id=getattr(req, "selected_doc_id", None))
     _audit.log("shorten_script", {"user_id": req.user_id, "script_id": req.script_id})
     return success(result)
 
 
 @script.post("/meta")
 def script_meta(req: MetaRequest, agent=Depends(get_agent)):
-    data = agent.execute_tool(
-        user_id=req.user_id,
-        intent="meta",
-        instruction="提取元信息",
-        content=req.content or "",
-        script_id=req.script_id,
-    )
+    data = agent.execute_tool(user_id=req.user_id, intent="meta", instruction="提取元信息", content=req.content or "", script_id=req.script_id, selected_doc_id=getattr(req, "selected_doc_id", None))
     _audit.log("script_meta", {"user_id": req.user_id, "script_id": req.script_id})
     return success(data)
 
 
 @script.post("/similar")
 def generate_similar(req: ToolRequest, agent=Depends(get_agent)):
-    data = agent.execute_tool(
-        user_id=req.user_id,
-        intent="similar",
-        instruction=req.instruction or "生成相似风格短剧",
-        content=req.content or "",
-        script_id=req.script_id,
-    )
+    data = agent.execute_tool(user_id=req.user_id, intent="similar", instruction=req.instruction or "生成相似风格短剧", content=req.content or "", script_id=req.script_id, selected_doc_id=getattr(req, "selected_doc_id", None))
     _audit.log("similar_script", {"user_id": req.user_id, "script_id": req.script_id})
     return success(data)
 
 
 @script.post("/shot")
 def generate_shot(req: ShotGenerateRequest, agent=Depends(get_agent)):
-    data = agent.execute_tool(
-        user_id=req.user_id,
-        intent="shot",
-        instruction="生成分镜脚本",
-        content=req.content or "",
-        script_id=req.script_id,
-    )
+    data = agent.execute_tool(user_id=req.user_id, intent="shot", instruction="生成分镜脚本", content=req.content or "", script_id=req.script_id, selected_doc_id=getattr(req, "selected_doc_id", None))
     return success(data)
 
 
@@ -160,25 +146,13 @@ def list_documents(user_id: str, rag: RAGService = Depends(get_rag_service)):
 
 @script.post("/auto-plan")
 def auto_plan(req: AutoPlanRequest, agent=Depends(get_agent)):
-    result = agent.plan_and_execute(
-        user_id=req.user_id,
-        goal=req.goal,
-        brief=req.brief,
-        script_id=req.script_id,
-        top_k=req.top_k,
-        selected_doc_id=req.selected_doc_id,
-    )
+    result = agent.plan_and_execute(user_id=req.user_id, goal=req.goal, brief=req.brief, script_id=req.script_id, top_k=req.top_k, selected_doc_id=req.selected_doc_id)
     _audit.log("auto_plan", {"user_id": req.user_id, "goal": req.goal})
     return success(result)
 
 
 @script.post("/upload")
-async def upload_doc(
-    file: UploadFile = File(...),
-    user_id: str = Form(default="_docs"),
-    rag: RAGService = Depends(get_rag_service),
-    settings=Depends(get_settings_dep),
-):
+async def upload_doc(file: UploadFile = File(...), user_id: str = Form(default="_docs"), rag: RAGService = Depends(get_rag_service), settings=Depends(get_settings_dep)):
     raw = await file.read()
     suffix = Path(file.filename or "").suffix.lower()
     temp_path = Path(settings.data_dir) / "uploads" / (file.filename or "upload.txt")
@@ -194,19 +168,7 @@ async def upload_doc(
         return success({"error": "仅支持 pdf/docx/txt"}, msg="unsupported format", code=400)
     chunks = rag.add_document(user_id, file.filename or temp_path.stem, content, chunk_size=settings.max_chunk_size, overlap=settings.chunk_overlap)
     _audit.log("upload_doc", {"file_name": file.filename, "chunks": chunks, "user_id": user_id})
-    return success(
-        {
-            "thinking": [
-                "reason: 识别上传文件格式并执行文本解析。",
-                "act: 对文本进行分块后写入 Milvus，绑定 user_id。",
-            ],
-            "intent": "upload_ingest",
-            "context_used": "uploaded_file",
-            "tool_used": ["utils.read_file", "rag.add_document"],
-            "content": f"文件 {file.filename} 入库完成，共 {chunks} 个分块。",
-            "final_result": {"file_name": file.filename, "chunks": chunks, "user_id": user_id, "document_context": rag.get_document_content(user_id, file.filename or temp_path.stem)[:500]},
-        }
-    )
+    return success({"thinking": ["reason: 识别上传文件格式并执行文本解析。", "act: 对文本进行分块后写入 Milvus，绑定 user_id。"], "intent": "upload_ingest", "context_used": "uploaded_file", "tool_used": ["utils.read_file", "rag.add_document"], "content": f"文件 {file.filename} 入库完成，共 {chunks} 个分块。", "final_result": {"file_name": file.filename, "chunks": chunks, "user_id": user_id, "document_context": rag.get_document_content(user_id, file.filename or temp_path.stem)[:500]}})
 
 
 @script.post("/export")
@@ -248,15 +210,15 @@ def export_script(req: ExportRequest, rag: RAGService = Depends(get_rag_service)
 
 
 @chat.post("/message")
-def chat_message(req: ChatRequest, agent = Depends(get_agent)):
-    reply = agent.run_with_trace(req.user_id, req.message)
-    _audit.log("chat_message", {"user_id": req.user_id})
+def chat_message(req: ChatRequest, agent=Depends(get_agent)):
+    reply = agent.plan_and_execute(user_id=req.user_id, goal=req.message, brief=req.message, selected_doc_id=req.selected_doc_id)
+    _audit.log("chat_message", {"user_id": req.user_id, "selected_doc_id": req.selected_doc_id})
     return success(reply)
 
 
 @chat.post("/stream")
-def chat_stream(req: ChatRequest, agent = Depends(get_agent)):
-    payload = agent.run_with_trace(req.user_id, req.message)
+def chat_stream(req: ChatRequest, agent=Depends(get_agent)):
+    payload = agent.plan_and_execute(user_id=req.user_id, goal=req.message, brief=req.message, selected_doc_id=req.selected_doc_id)
     reply = payload.get("content", "")
 
     def event_stream():

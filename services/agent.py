@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+import json
 import re
 from time import perf_counter
 from typing import Any
+
+from langchain_core.prompts import PromptTemplate
+from langchain_core.tools import Tool
+from langchain_openai import ChatOpenAI
 
 from services.llm import ScriptEngine
 from services.memory import RedisChatMessageHistory
@@ -52,20 +56,6 @@ class ReActDramaAgent:
             return "auto_generate"
         return "general"
 
-    def _observe_search(self, user_id: str, brief: str, top_k: int) -> tuple[list[dict[str, Any]], AgentStep]:
-        start = perf_counter()
-        results = self.rag.search(user_id, brief, top_k=top_k)
-        latency_ms = (perf_counter() - start) * 1000
-        step = AgentStep(
-            action="observe",
-            reason="检索与目标最相关的历史内容，作为生成上下文。",
-            tool="rag.search",
-            input={"user_id": user_id, "query": brief, "top_k": top_k},
-            output={"results": results},
-            latency_ms=latency_ms,
-        )
-        return results, step
-
     def _extract_generation_params(self, goal: str) -> dict[str, Any]:
         text = goal.replace("，", " ").replace("。", " ")
         duration_min = 1
@@ -82,45 +72,25 @@ class ReActDramaAgent:
         if not keywords:
             keywords = [token for token in re.split(r"[\s,，、]+", text) if 1 < len(token) <= 6][:6]
 
-        theme_parts = [item for item in ["校园", "重生", "逆袭", "大女主", "悬疑", "爱情", "豪门", "家庭", "职场"] if
-                       item in text]
+        theme_parts = [item for item in ["校园", "重生", "逆袭", "大女主", "悬疑", "爱情", "豪门", "家庭", "职场"] if item in text]
         theme = "".join(theme_parts[:3]) or "短剧"
-        return {
-            "theme": theme,
-            "style": style,
-            "duration_min": duration_min,
-            "keywords": keywords[:8],
-        }
-
-    @staticmethod
-    def _quality_score(text: str) -> int:
-        score = 50
-        if len(text) >= 120:
-            score += 15
-        if any(token in text for token in ["冲突", "反转", "打脸", "升级"]):
-            score += 15
-        if any(token in text for token in ["人物", "场景", "分镜", "标题"]):
-            score += 10
-        return min(score, 100)
+        return {"theme": theme, "style": style, "duration_min": duration_min, "keywords": keywords[:8]}
 
     def _normalize_history(self, history: list[dict[str, str]]) -> list[dict[str, str]]:
-        normalized: list[dict[str, str]] = []
-        for item in history:
-            role = item.get("role")
-            content = item.get("content", "")
-            if role in {"user", "assistant"} and content:
-                normalized.append({"role": role, "content": content})
-        return normalized
+        return [item for item in history if item.get("role") in {"user", "assistant"} and item.get("content")]
 
     def _last_assistant_script(self, history: list[dict[str, str]]) -> str:
         for item in reversed(history):
-            if item.get("role") == "assistant":
-                content = item.get("content", "")
-                if content:
-                    return content
+            if item.get("role") == "assistant" and item.get("content"):
+                return item["content"]
         return ""
 
-    def _build_context(self, user_id: str, brief: str, top_k: int) -> tuple[str, list[dict[str, Any]], list[dict[str, str]], list[dict[str, Any]]]:
+    def _observe_search(self, user_id: str, brief: str, top_k: int) -> tuple[list[dict[str, Any]], AgentStep]:
+        start = perf_counter()
+        results = self.rag.search(user_id, brief, top_k=top_k)
+        return results, AgentStep(action="observe", reason="检索与目标最相关的历史内容，作为生成上下文。", tool="rag.search", input={"user_id": user_id, "query": brief, "top_k": top_k}, output={"results": results}, latency_ms=(perf_counter() - start) * 1000)
+
+    def _build_context(self, user_id: str, brief: str, top_k: int) -> tuple[str, list[AgentStep], list[dict[str, str]], list[dict[str, Any]]]:
         history = self._normalize_history(self.memory_service.get_messages(user_id))
         recent_docs = self.rag.get_recent_documents(user_id, limit=5)
         search_results, search_step = self._observe_search(user_id, brief, top_k)
@@ -136,317 +106,261 @@ class ReActDramaAgent:
     def _thinking(self, step: AgentStep) -> str:
         return f"{step.action}: {step.reason}"
 
-    def _timed_step(self, step: AgentStep, started_at: float) -> AgentStep:
-        step.latency_ms = (perf_counter() - started_at) * 1000
-        return step
+    def _make_step(self, action: str, reason: str, tool: str, input_data: dict[str, Any], output_data: dict[str, Any], started_at: float) -> AgentStep:
+        return AgentStep(action=action, reason=reason, tool=tool, input=input_data, output=output_data, latency_ms=(perf_counter() - started_at) * 1000)
 
-    def _make_step(
-        self,
-        action: str,
-        reason: str,
-        tool: str,
-        input_data: dict[str, Any],
-        output_data: dict[str, Any],
-        started_at: float,
-    ) -> AgentStep:
-        return AgentStep(
-            action=action,
-            reason=reason,
-            tool=tool,
-            input=input_data,
-            output=output_data,
-            latency_ms=(perf_counter() - started_at) * 1000,
-        )
-
-    def _format_output(
-        self,
-        intent: str,
-        steps: list[AgentStep],
-        final_result: dict[str, Any],
-        context_used: str,
-        started_at: float | None = None,
-    ) -> dict[str, Any]:
+    def _format_output(self, intent: str, steps: list[AgentStep], final_result: dict[str, Any], context_used: str, started_at: float | None = None) -> dict[str, Any]:
         content = final_result.get("content")
         if content is None and intent == "search":
             content = "已完成检索，请查看 results。"
-        thinking_steps: list[dict[str, Any]] = []
-        for idx, step in enumerate(steps, start=1):
-            thinking_steps.append(
-                {
-                    "step": idx,
-                    "action": step.action,
-                    "reason": step.reason,
-                    "tool": step.tool,
-                    "input": step.input,
-                    "output_summary": list(step.output.keys()) if isinstance(step.output, dict) else [],
-                    "latency_ms": round(step.latency_ms, 2) if step.latency_ms is not None else None,
-                }
-            )
-        total_latency_ms = None if started_at is None else round((perf_counter() - started_at) * 1000, 2)
-        return {
-            "thinking": [self._thinking(step) for step in steps],
-            "thinking_steps": thinking_steps,
-            "intent": intent,
-            "context_used": context_used,
-            "tool_used": [step.tool for step in steps if step.tool],
-            "content": content or "",
-            "final_result": final_result,
-            "total_latency_ms": total_latency_ms,
-            "steps": [step.__dict__ for step in steps],
-        }
-
-    def _resolve_tool_context(
-        self,
-        user_id: str,
-        brief: str,
-        task_type: str,
-        top_k: int,
-    ) -> tuple[str, list[AgentStep], str]:
-        history = self._normalize_history(self.memory_service.get_messages(user_id))
-        recent_docs = self.rag.get_recent_documents(user_id, limit=5)
-        doc_context = "\n".join(f"[上传文件] {item.get('doc_id')}: {item.get('preview', '')}" for item in recent_docs)
-        steps: list[AgentStep] = [
-            AgentStep(
-                action="reason",
-                reason=f"解析用户需求并识别意图为 {task_type}。",
-                tool="intent.classifier",
-                input={"brief": brief},
-                output={"intent": task_type, "recent_documents": [item.get('doc_id') for item in recent_docs]},
-                latency_ms=0.0,
-            )
-        ]
-        last_script = self._last_assistant_script(history)
-        if not last_script and doc_context:
-            steps.append(
-                AgentStep(
-                    action="observe",
-                    reason="优先使用最近上传的文档作为显式上下文。",
-                    tool="rag.get_recent_documents",
-                    input={"user_id": user_id},
-                    output={"documents": [item.get('doc_id') for item in recent_docs]},
-                    latency_ms=0.0,
-                )
-            )
-            return doc_context, steps, "recent_uploaded_docs"
-
-        if last_script:
-            steps.append(
-                AgentStep(
-                    action="observe",
-                    reason="读取 Redis 历史中的上一轮剧本作为主要上下文。",
-                    tool="memory.get_messages",
-                    input={"user_id": user_id},
-                    output={"has_history": True},
-                    latency_ms=0.0,
-                )
-            )
-            return last_script, steps, "redis_history"
-
-        search_results, search_step = self._observe_search(user_id, brief, top_k)
-        steps.append(
-            AgentStep(
-                action="observe",
-                reason="Redis 无可用剧本，转为检索 Milvus 作为参考。",
-                tool="fallback.rag_search",
-                input={"query": brief, "top_k": top_k},
-                output={"result_count": len(search_results)},
-                latency_ms=0.0,
-            )
-        )
-        steps.append(search_step)
-        context = "\n\n".join(item.get("content", "") for item in search_results if item.get("content"))
-        return context or brief, steps, "milvus_search" if search_results else "user_input_only"
-
-    def execute_tool(
-        self,
-        user_id: str,
-        intent: str,
-        instruction: str = "",
-        content: str = "",
-        script_id: str | None = None,
-        top_k: int = 3,
-    ) -> dict[str, Any]:
-        started_at = perf_counter()
-        task_type = "similar" if intent == "similar" else intent
-        context, steps, context_used = self._resolve_tool_context(user_id, content or instruction, task_type, top_k)
-        if content:
-            context = content
-            context_used = "request_content"
-
-        final_result: dict[str, Any]
-        if task_type == "rewrite":
-            started_at = perf_counter()
-            result = self.engine.rewrite_script(context, instruction)
-            final_result = {"mode": "rewrite", "content": result}
-            steps.append(self._make_step("act", "调用改写工具完成重写。", "llm.rewrite_script", {"instruction": instruction}, {"content": result}, started_at))
-        elif task_type == "continue":
-            started_at = perf_counter()
-            result = self.engine.continue_script(context)
-            final_result = {"mode": "continue", "content": result}
-            steps.append(self._make_step("act", "调用续写工具延展剧情。", "llm.continue_script", {}, {"content": result}, started_at))
-        elif task_type == "expand":
-            started_at = perf_counter()
-            result = self.engine.expand_script(context)
-            final_result = {"mode": "expand", "content": result}
-            steps.append(self._make_step("act", "调用扩写工具丰富细节。", "llm.expand_script", {}, {"content": result}, started_at))
-        elif task_type == "shorten":
-            started_at = perf_counter()
-            result = self.engine.shorten_script(context)
-            final_result = {"mode": "shorten", "content": result}
-            steps.append(self._make_step("act", "调用精简工具压缩文本。", "llm.shorten_script", {}, {"content": result}, started_at))
-        elif task_type == "shot":
-            started_at = perf_counter()
-            result = self.engine.generate_shot_script(context)
-            final_result = {"mode": "shot", "content": result}
-            steps.append(self._make_step("act", "调用分镜工具转换为镜头脚本。", "llm.generate_shot_script", {}, {"content": result}, started_at))
-        elif task_type == "meta":
-            started_at = perf_counter()
-            meta = {
-                "mode": "meta",
-                "title": self.engine.generate_title(context),
-                "keywords": self.engine.extract_keywords(context),
-                "characters": self.engine.generate_characters(context),
-                "score": self.engine.score_script(context),
+        thinking_steps = [
+            {
+                "step": idx,
+                "action": step.action,
+                "reason": step.reason,
+                "tool": step.tool,
+                "input": step.input,
+                "output_summary": list(step.output.keys()) if isinstance(step.output, dict) else [],
+                "latency_ms": round(step.latency_ms, 2) if step.latency_ms is not None else None,
             }
-            final_result = meta
-            steps.append(self._make_step("act", "调用元信息工具提取标题/关键词/角色/评分。", "llm.meta_tools", {}, meta, started_at))
-        elif task_type == "similar":
+            for idx, step in enumerate(steps, start=1)
+        ]
+        total_latency_ms = None if started_at is None else round((perf_counter() - started_at) * 1000, 2)
+        return {"thinking": [self._thinking(step) for step in steps], "thinking_steps": thinking_steps, "intent": intent, "context_used": context_used, "tool_used": [step.tool for step in steps if step.tool], "content": content or "", "final_result": final_result, "total_latency_ms": total_latency_ms, "steps": [step.__dict__ for step in steps]}
+
+    def _build_react_llm(self) -> ChatOpenAI:
+        return ChatOpenAI(model=self.engine.model_name, api_key=self.engine.api_key, base_url="https://dashscope.aliyuncs.com/compatible-mode/v1", temperature=0.2)
+
+    def _build_react_prompt(self) -> PromptTemplate:
+        template = """你是一个专业短剧编剧与中文助手，必须使用工具完成任务。
+
+可用工具：
+{tools}
+
+上下文说明：
+{context_meta}
+
+严格遵守：
+- 需要处理剧本生成、改写、续写、扩写、精简、分镜、相似剧本、元信息、检索、通用回复时，优先使用最合适的工具。
+- 如果上下文里已经给出剧本或检索结果，请结合上下文作答，不要编造。
+- 如果你不确定事实，请说明不确定。
+- 必须采用 ReAct 格式：
+Thought: ...
+Action: <tool name>
+Action Input: <input>
+Observation: <tool result>
+... 
+Final: <final answer>
+
+上下文：
+{context}
+
+问题：
+{input}
+
+{agent_scratchpad}"""
+        return PromptTemplate.from_template(template)
+
+    def _safe_json(self, payload: Any) -> str:
+        return json.dumps(payload, ensure_ascii=False)
+
+    def _coerce_json(self, raw_input: str) -> dict[str, Any]:
+        if not raw_input:
+            return {}
+        if raw_input.strip().startswith("{"):
+            try:
+                return json.loads(raw_input)
+            except Exception:
+                return {"input": raw_input}
+        return {"input": raw_input}
+
+    def _build_tools(self, user_id: str, context: str, top_k: int) -> dict[str, Tool]:
+        def generate_script_tool(raw_input: str) -> str:
+            data = self._coerce_json(raw_input)
+            params = data.get("params") or self._extract_generation_params(data.get("goal", raw_input))
+            return self.engine.generate_script(params["theme"], params["style"], params["duration_min"], params["keywords"])
+
+        def rewrite_tool(raw_input: str) -> str:
+            data = self._coerce_json(raw_input)
+            return self.engine.rewrite_script(data.get("content", context), data.get("instruction", "根据要求改写剧本"))
+
+        def continue_tool(raw_input: str) -> str:
+            data = self._coerce_json(raw_input)
+            return self.engine.continue_script(data.get("content", context))
+
+        def expand_tool(raw_input: str) -> str:
+            data = self._coerce_json(raw_input)
+            return self.engine.expand_script(data.get("content", context))
+
+        def shorten_tool(raw_input: str) -> str:
+            data = self._coerce_json(raw_input)
+            return self.engine.shorten_script(data.get("content", context))
+
+        def shot_tool(raw_input: str) -> str:
+            data = self._coerce_json(raw_input)
+            return self.engine.generate_shot_script(data.get("content", context))
+
+        def similar_tool(raw_input: str) -> str:
+            data = self._coerce_json(raw_input)
+            instruction = data.get("instruction", raw_input)
+            reference = data.get("reference") or self.rag.get_retriever_context(user_id, instruction, top_k=top_k)
+            return self.engine.generate_similar_script(instruction, reference or context)
+
+        def meta_tool(raw_input: str) -> str:
+            data = self._coerce_json(raw_input)
+            content = data.get("content", context)
+            meta = {"title": self.engine.generate_title(content), "keywords": self.engine.extract_keywords(content), "characters": self.engine.generate_characters(content), "score": self.engine.score_script(content)}
+            return self._safe_json(meta)
+
+        def search_tool(raw_input: str) -> str:
+            data = self._coerce_json(raw_input)
+            results = self.rag.search(user_id, data.get("query", raw_input), top_k=top_k)
+            return self._safe_json(results)
+
+        def general_tool(raw_input: str) -> str:
+            data = self._coerce_json(raw_input)
+            return self.engine.generate_reply(data.get("message", raw_input), self.memory_service.get_messages(user_id), extra_context=context)
+
+        tools = {
+            "generate_script": Tool(name="generate_script", func=generate_script_tool, description="生成完整短剧剧本。输入 JSON: {goal, params}."),
+            "rewrite_script": Tool(name="rewrite_script", func=rewrite_tool, description="改写剧本。输入 JSON: {content, instruction}."),
+            "continue_script": Tool(name="continue_script", func=continue_tool, description="续写剧本。输入 JSON: {content}."),
+            "expand_script": Tool(name="expand_script", func=expand_tool, description="扩写剧本。输入 JSON: {content}."),
+            "shorten_script": Tool(name="shorten_script", func=shorten_tool, description="精简剧本。输入 JSON: {content}."),
+            "generate_shot_script": Tool(name="generate_shot_script", func=shot_tool, description="把剧本转换为分镜脚本。输入 JSON: {content}."),
+            "generate_similar_script": Tool(name="generate_similar_script", func=similar_tool, description="基于参考风格生成原创相似剧本。输入 JSON: {instruction, reference}."),
+            "extract_meta": Tool(name="extract_meta", func=meta_tool, description="提取标题、关键词、角色和评分。输入 JSON: {content}."),
+            "search_scripts": Tool(name="search_scripts", func=search_tool, description="检索相关剧本或片段。输入 JSON: {query}."),
+            "general_reply": Tool(name="general_reply", func=general_tool, description="处理通用中文问答。输入 JSON: {message}."),
+        }
+        return tools
+
+    def _doc_context_meta(self, selected_doc_id: str | None, recent_docs: list[dict[str, Any]], user_id: str, brief: str) -> tuple[str, str]:
+        selected_content = self.rag.get_document_content(user_id, selected_doc_id) if selected_doc_id else ""
+        if not selected_content:
+            for item in recent_docs:
+                if item.get("doc_id"):
+                    selected_doc_id = item.get("doc_id")
+                    selected_content = self.rag.get_document_content(user_id, selected_doc_id)
+                    if selected_content:
+                        break
+        preview = selected_content[:100] if selected_content else ""
+        meta = f"是否使用文档: {bool(selected_content)}\n文档ID: {selected_doc_id or 'None'}\n文档前100字预览: {preview or 'None'}\n查询: {brief}"
+        return selected_content, meta
+
+    def _run_react_agent(self, user_id: str, message: str, context: str, top_k: int, context_meta: str) -> tuple[str, list[AgentStep]]:
+        llm = self._build_react_llm()
+        tools = self._build_tools(user_id, context, top_k)
+        tool_list = "\n".join(f"- {tool.name}: {tool.description}" for tool in tools.values())
+        prompt = self._build_react_prompt()
+        scratchpad = ""
+        steps: list[AgentStep] = []
+        for _ in range(4):
+            rendered = prompt.format(tools=tool_list, context=context, context_meta=context_meta, input=message, agent_scratchpad=scratchpad)
+            response = llm.invoke(rendered)
+            text = getattr(response, "content", str(response))
+            if "Final:" in text:
+                return text.split("Final:", 1)[1].strip(), steps
+            action_match = re.search(r"Action\s*:\s*(.+)", text)
+            input_match = re.search(r"Action Input\s*:\s*(.+)", text)
+            if not action_match:
+                return text.strip(), steps
+            tool_name = action_match.group(1).strip()
+            tool_input = input_match.group(1).strip() if input_match else "{}"
+            tool = tools.get(tool_name)
+            if tool is None:
+                return text.strip(), steps
             started_at = perf_counter()
-            references = self.rag.search(user_id, instruction or content or context, top_k=top_k)
-            sample = "\n\n".join(item.get("content", "") for item in references if item.get("content"))
-            result = self.engine.generate_similar_script(instruction or "生成相似风格短剧", sample or context)
-            final_result = {"mode": "similar", "content": result, "references": references}
-            steps.append(self._make_step("act", "调用相似剧本工具，基于检索参考生成原创文本。", "llm.generate_similar_script", {"reference_count": len(references)}, {"content": result}, started_at))
-        elif task_type == "search":
+            observation = tool.invoke(tool_input)
+            steps.append(AgentStep(action="act", reason=f"ReAct 调用工具 {tool_name}。", tool=tool_name, input={"input": tool_input}, output={"observation": observation if isinstance(observation, str) else str(observation)}, latency_ms=(perf_counter() - started_at) * 1000))
+            scratchpad += f"{text}\nObservation: {observation}\n"
+        return scratchpad.strip(), steps
+
+    def _finalize_memory(self, user_id: str, user_text: str, assistant_text: str) -> None:
+        self.memory_service.add_user_message(user_id, user_text)
+        self.memory_service.add_ai_message(user_id, assistant_text)
+
+    def _run_task(self, user_id: str, task_type: str, instruction: str, content: str, top_k: int, script_id: str | None, selected_doc_id: str | None = None) -> dict[str, Any]:
+        brief = instruction or content
+        context, search_steps, history, recent_docs = self._build_context(user_id, brief, top_k)
+        doc_content, context_meta = self._doc_context_meta(selected_doc_id, recent_docs, user_id, brief)
+        if doc_content:
+            context = doc_content
+        steps = list(search_steps)
+        last_script = self._last_assistant_script(history)
+        if last_script and task_type in {"shot", "rewrite", "continue", "expand", "shorten", "meta"} and not doc_content:
+            context = last_script
+        if content and not doc_content:
+            context = content
+
+        if task_type == "search":
             started_at = perf_counter()
-            results = self.rag.search(user_id, instruction or content or context, top_k=top_k)
+            results = self.rag.search(user_id, brief, top_k=top_k)
             final_result = {"mode": "search", "results": results}
-            steps.append(self._make_step("act", "执行语义检索并返回结果。", "rag.search", {"top_k": top_k}, {"result_count": len(results)}, started_at))
-        else:
-            started_at = perf_counter()
-            reply = self.engine.generate_reply(instruction or content or context, self.memory_service.get_messages(user_id), extra_context=context)
-            final_result = {"mode": "general", "content": reply}
-            steps.append(self._make_step("act", "未命中的专用流程，直接交给通用大模型回答。", "llm.generate_reply", {"message": instruction or content or context}, {"content": reply}, started_at))
+            steps.append(self._make_step("act", "执行语义检索并返回结果。", "rag.search", {"brief": brief, "top_k": top_k}, {"result_count": len(results)}, started_at))
+            payload = self._format_output(task_type, steps, final_result, "auto_plan_context", started_at)
+            payload.update({"goal": brief, "task_type": task_type, "script_id": script_id, "selected_doc_id": selected_doc_id})
+            return payload
 
-        generated = final_result.get("content")
-        if generated:
-            self.memory_service.add_user_message(user_id, instruction or content)
-            self.memory_service.add_ai_message(user_id, generated)
-            if script_id:
-                self.rag.upsert_script(user_id, script_id, generated)
-        return self._format_output(task_type, steps, final_result, context_used, started_at)
-
-    def plan_and_execute(self, user_id: str, goal: str, brief: str | None = None, script_id: str | None = None,
-                         top_k: int = 3, selected_doc_id: str | None = None) -> dict[str, Any]:
         started_at = perf_counter()
+        if task_type == "similar":
+            text, agent_steps = self._run_react_agent(user_id, json.dumps({"instruction": instruction or content or brief, "reference": self.rag.get_retriever_context(user_id, brief, top_k=top_k) or context}, ensure_ascii=False), context, top_k, context_meta)
+            final_result = {"mode": "similar", "content": text}
+        elif task_type == "rewrite":
+            text, agent_steps = self._run_react_agent(user_id, json.dumps({"content": context, "instruction": instruction or brief}, ensure_ascii=False), context, top_k, context_meta)
+            final_result = {"mode": "rewrite", "content": text}
+        elif task_type == "continue":
+            text, agent_steps = self._run_react_agent(user_id, json.dumps({"content": context}, ensure_ascii=False), context, top_k, context_meta)
+            final_result = {"mode": "continue", "content": text}
+        elif task_type == "expand":
+            text, agent_steps = self._run_react_agent(user_id, json.dumps({"content": context}, ensure_ascii=False), context, top_k, context_meta)
+            final_result = {"mode": "expand", "content": text}
+        elif task_type == "shorten":
+            text, agent_steps = self._run_react_agent(user_id, json.dumps({"content": context}, ensure_ascii=False), context, top_k, context_meta)
+            final_result = {"mode": "shorten", "content": text}
+        elif task_type == "shot":
+            text, agent_steps = self._run_react_agent(user_id, json.dumps({"content": context}, ensure_ascii=False), context, top_k, context_meta)
+            final_result = {"mode": "shot", "content": text}
+        elif task_type == "meta":
+            text, agent_steps = self._run_react_agent(user_id, json.dumps({"content": context}, ensure_ascii=False), context, top_k, context_meta)
+            try:
+                meta = json.loads(text)
+            except Exception:
+                meta = {"raw": text}
+            final_result = {"mode": "meta", **meta}
+        elif task_type == "auto_generate":
+            params = self._extract_generation_params(brief)
+            text, agent_steps = self._run_react_agent(user_id, json.dumps({"goal": brief, "params": params}, ensure_ascii=False), context, top_k, context_meta)
+            final_result = {"mode": "auto_generate", "content": text, "params": params}
+        else:
+            text, agent_steps = self._run_react_agent(user_id, json.dumps({"message": instruction or content or brief}, ensure_ascii=False), context, top_k, context_meta)
+            final_result = {"mode": "general", "content": text}
+
+        steps.extend(agent_steps)
+        if final_result.get("content"):
+            self._finalize_memory(user_id, instruction or content or brief, final_result.get("content", ""))
+            if script_id:
+                self.rag.upsert_script(user_id, script_id, final_result.get("content", ""))
+        if recent_docs:
+            final_result["document_context"] = f"最近上传文档：{', '.join(item.get('doc_id', '') for item in recent_docs if item.get('doc_id'))}"
+        payload = self._format_output(task_type, steps, final_result, "auto_plan_context", started_at)
+        payload.update({"goal": brief, "task_type": task_type, "script_id": script_id, "selected_doc_id": selected_doc_id})
+        return payload
+
+    def execute_tool(self, user_id: str, intent: str, instruction: str = "", content: str = "", script_id: str | None = None, top_k: int = 3, selected_doc_id: str | None = None) -> dict[str, Any]:
+        return self._run_task(user_id, intent if intent != "similar" else "similar", instruction, content, top_k, script_id, selected_doc_id=selected_doc_id)
+
+    def plan_and_execute(self, user_id: str, goal: str, brief: str | None = None, script_id: str | None = None, top_k: int = 3, selected_doc_id: str | None = None) -> dict[str, Any]:
         brief = brief or goal
         task_type = self._classify_goal(goal)
-        steps: list[AgentStep] = []
-        if task_type == "general":
-            reply = self.engine.generate_reply(goal, self.memory_service.get_messages(user_id))
-            final_result = {"mode": "general", "content": reply}
-            steps.append(AgentStep(action="act", reason="未命中短剧工作流，直接交给通用大模型回答。", tool="llm.generate_reply", input={"goal": goal}, output={"content": reply}, latency_ms=0.0))
-            self.memory_service.add_user_message(user_id, goal)
-            self.memory_service.add_ai_message(user_id, reply)
-            payload = self._format_output(task_type, steps, final_result, "general_llm", started_at)
-            payload.update({"goal": goal, "task_type": task_type, "script_id": script_id})
-            return payload
-        context, search_steps, history, recent_docs = self._build_context(user_id, brief, top_k)
-        steps.extend(search_steps)
-        last_script = self._last_assistant_script(history)
         if selected_doc_id:
             selected_content = self.rag.get_document_content(user_id, selected_doc_id)
             if selected_content:
-                context = selected_content
-                document_context = f"指定文档：{selected_doc_id}"
-            else:
-                document_context = f"指定文档：{selected_doc_id}（未找到内容，回退到默认上下文）"
-        else:
-            uploaded_names = ", ".join(item.get("doc_id", "") for item in recent_docs if item.get("doc_id"))
-            document_context = f"最近上传文档：{uploaded_names}" if uploaded_names else ""
-        if last_script and task_type in {"shot", "rewrite", "continue", "expand", "shorten", "meta"} and not selected_doc_id:
-            context = last_script
-
-        final_result: dict[str, Any]
-        if task_type == "search":
-            started_at = perf_counter()
-            final_result = {"mode": "search", "results": self.rag.search(user_id, brief, top_k=top_k)}
-            steps.append(self._make_step("act", "执行语义检索并返回结果。", "rag.search", {"brief": brief, "top_k": top_k}, {"result_count": len(final_result["results"])}, started_at))
-        elif task_type == "similar":
-            started_at = perf_counter()
-            references = self.rag.search(user_id, brief, top_k=top_k)
-            ref_text = "\n\n".join(item.get("content", "") for item in references if item.get("content"))
-            result = self.engine.generate_similar_script(goal, ref_text or context)
-            final_result = {"mode": "similar", "content": result, "references": references}
-            steps.append(self._make_step("act", "基于检索参考生成相似风格原创剧本。", "llm.generate_similar_script", {"goal": goal}, {"content": result}, started_at))
-        elif task_type == "rewrite":
-            started_at = perf_counter()
-            result = self.engine.rewrite_script(context, goal)
-            final_result = {"mode": "rewrite", "content": result}
-            steps.append(self._make_step("act", "基于上一轮剧本进行改写。", "llm.rewrite_script", {"content": context, "instruction": goal}, {"content": result}, started_at))
-        elif task_type == "continue":
-            started_at = perf_counter()
-            result = self.engine.continue_script(context)
-            final_result = {"mode": "continue", "content": result}
-            steps.append(self._make_step("act", "基于上一轮剧本继续生成。", "llm.continue_script", {"content": context}, {"content": result}, started_at))
-        elif task_type == "expand":
-            started_at = perf_counter()
-            result = self.engine.expand_script(context)
-            final_result = {"mode": "expand", "content": result}
-            steps.append(self._make_step("act", "基于上一轮剧本扩写。", "llm.expand_script", {"content": context}, {"content": result}, started_at))
-        elif task_type == "shorten":
-            started_at = perf_counter()
-            result = self.engine.shorten_script(context)
-            final_result = {"mode": "shorten", "content": result}
-            steps.append(self._make_step("act", "基于上一轮剧本精简。", "llm.shorten_script", {"content": context}, {"content": result}, started_at))
-        elif task_type == "shot":
-            started_at = perf_counter()
-            result = self.engine.generate_shot_script(context)
-            final_result = {"mode": "shot", "content": result}
-            steps.append(self._make_step("act", "必须基于上一轮剧本生成分镜。", "llm.generate_shot_script", {"content": context}, {"content": result}, started_at))
-        elif task_type == "meta":
-            started_at = perf_counter()
-            meta = {"mode": "meta", "title": self.engine.generate_title(context), "keywords": self.engine.extract_keywords(context), "characters": self.engine.generate_characters(context), "score": self.engine.score_script(context)}
-            final_result = meta
-            steps.append(self._make_step("act", "提取元信息。", "llm.meta_tools", {"content": context}, meta, started_at))
-        else:
-            started_at = perf_counter()
-            params = self._extract_generation_params(goal)
-            script = self.engine.generate_script(params["theme"], params["style"], params["duration_min"], params["keywords"])
-            final_result = {"mode": "auto_generate", "content": script, "params": params}
-            steps.append(self._make_step("act", "根据目标直接生成完整短剧剧本。", "llm.generate_script", params, {"content": script}, started_at))
-
-        if final_result.get("mode") in {"rewrite", "continue", "expand", "shorten", "shot", "auto_generate", "general"}:
-            self.memory_service.add_user_message(user_id, goal)
-            self.memory_service.add_ai_message(user_id, final_result.get("content", ""))
-
-        if document_context:
-            final_result["document_context"] = document_context
-        payload = self._format_output(task_type, steps, final_result, "auto_plan_context", started_at)
-        payload.update({"goal": goal, "task_type": task_type, "script_id": script_id})
-        return payload
+                brief = selected_content
+        return self._run_task(user_id, task_type, goal, brief, top_k, script_id, selected_doc_id=selected_doc_id)
 
     def run(self, user_id: str, message: str) -> str:
-        history = self.memory_service.get_messages(user_id)
-        reply = self.engine.generate_reply(message, history)
-        self.memory_service.add_user_message(user_id, message)
-        self.memory_service.add_ai_message(user_id, reply)
-        return reply
+        return self.plan_and_execute(user_id=user_id, goal=message, brief=message).get("content", "")
 
-    def run_with_trace(self, user_id: str, message: str) -> dict[str, Any]:
-        started_at = perf_counter()
-        history = self.memory_service.get_messages(user_id)
-        recent_docs = self.rag.get_recent_documents(user_id, limit=5)
-        doc_context = "\n".join(f"[上传文件] {item.get('doc_id')}: {item.get('preview', '')}" for item in recent_docs)
-        reply = self.engine.generate_reply(message, history, extra_context=doc_context)
-        self.memory_service.add_user_message(user_id, message)
-        self.memory_service.add_ai_message(user_id, reply)
-        steps = [
-            AgentStep(action="reason", reason="解析聊天问题并确认回复目标。", tool="intent.chat", input={"message": message}, output={"mode": "general_or_chat"}, latency_ms=0.0),
-            AgentStep(action="observe", reason="读取 Redis 对话历史与最近上传文档作为上下文。", tool="memory.get_messages", input={"user_id": user_id}, output={"history_count": len(history), "document_count": len(recent_docs)}, latency_ms=0.0),
-            AgentStep(action="act", reason="调用通用对话工具生成最终回复。", tool="llm.generate_reply", input={"message": message}, output={"content": reply}, latency_ms=0.0),
-        ]
-        final_result = {"mode": "chat", "content": reply}
-        if doc_context:
-            final_result["document_context"] = doc_context
-        return self._format_output("chat", steps, final_result, "recent_uploaded_docs" if recent_docs else "redis_history", started_at)
+    def run_with_trace(self, user_id: str, message: str, selected_doc_id: str | None = None) -> dict[str, Any]:
+        return self.plan_and_execute(user_id=user_id, goal=message, brief=message, selected_doc_id=selected_doc_id)

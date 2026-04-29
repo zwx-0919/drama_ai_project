@@ -42,3 +42,21 @@
 {"time": "2026-04-24T06:17:30.233414", "event": "chat_message", "payload": {"user_id": "test-user"}}
 {"time": "2026-04-24T06:23:52.529013", "event": "chat_message", "payload": {"user_id": "test-user"}}
 {"time": "2026-04-24T06:24:40.764818", "event": "chat_message", "payload": {"user_id": "test-user"}}
+{"time": "2026-04-27T10:43:05.293080", "event": "upload_doc", "payload": {"file_name": "短剧剧本.docx", "chunks": 3, "user_id": "test-user"}}
+{"time": "2026-04-27T10:44:07.973877", "event": "chat_message", "payload": {"user_id": "test-user"}}
+{"time": "2026-04-27T10:51:17.432084", "event": "chat_message", "payload": {"user_id": "test-user"}}
+{"time": "2026-04-27T10:59:22.716757", "event": "upload_doc", "payload": {"file_name": "短剧剧本.docx", "chunks": 3, "user_id": "test-user"}}
+{"time": "2026-04-27T11:00:12.349503", "event": "chat_message", "payload": {"user_id": "test-user", "selected_doc_id": "短剧剧本.docx"}}
+{"time": "2026-04-27T11:01:37.229046", "event": "chat_message", "payload": {"user_id": "test-user", "selected_doc_id": "短剧剧本.docx"}}
+{"time": "2026-04-27T11:06:10.019260", "event": "upload_doc", "payload": {"file_name": "六级.pdf", "chunks": 1, "user_id": "test-user"}}
+{"time": "2026-04-27T11:06:20.651000", "event": "upload_doc", "payload": {"file_name": "短剧剧本.docx", "chunks": 3, "user_id": "test-user"}}
+{"time": "2026-04-27T11:06:28.743720", "event": "upload_doc", "payload": {"file_name": "六级.pdf", "chunks": 1, "user_id": "test-user"}}
+{"time": "2026-04-27T11:17:00.894985", "event": "upload_doc", "payload": {"file_name": "短剧剧本.docx", "chunks": 3, "user_id": "test-user"}}
+{"time": "2026-04-27T11:19:10.781525", "event": "chat_message", "payload": {"user_id": "test-user", "selected_doc_id": "短剧剧本.docx"}}
+{"time": "2026-04-27T11:21:14.825455", "event": "upload_doc", "payload": {"file_name": "短剧剧本.docx", "chunks": 3, "user_id": "test-user"}}
+{"time": "2026-04-27T11:21:57.506700", "event": "chat_message", "payload": {"user_id": "test-user", "selected_doc_id": "短剧剧本.docx"}}
+{"time": "2026-04-27T11:22:28.600546", "event": "upload_doc", "payload": {"file_name": "短剧剧本.docx", "chunks": 3, "user_id": "test-user"}}
+{"time": "2026-04-28T07:03:04.760860", "event": "upload_doc", "payload": {"file_name": "短剧剧本.docx", "chunks": 3, "user_id": "test-user"}}
+{"time": "2026-04-28T07:03:51.026122", "event": "chat_message", "payload": {"user_id": "test-user", "selected_doc_id": "短剧剧本.docx"}}
+{"time": "2026-04-28T08:07:39.457634", "event": "upload_doc", "payload": {"file_name": "短剧剧本.docx", "chunks": 3, "user_id": "test-user"}}
+{"time": "2026-04-28T08:08:25.924801", "event": "chat_message", "payload": {"user_id": "test-user", "selected_doc_id": "短剧剧本.docx"}}

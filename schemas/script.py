@@ -27,7 +27,6 @@ class ShotGenerateRequest(BaseModel):
 class ChatRequest(BaseModel):
     user_id: str = Field(..., min_length=1)
     message: str = Field(..., min_length=1)
-    selected_doc_id: Optional[str] = None
 
 
 class UploadDocResponse(BaseModel):
@@ -45,7 +44,7 @@ class ToolRequest(BaseModel):
     user_id: str = Field(..., min_length=1)
     script_id: Optional[str] = None
     content: Optional[str] = None
-    instruction: str = Field(default="")
+    instruction: str = Field(..., min_length=1)
 
 
 class MetaRequest(BaseModel):
@@ -59,7 +58,6 @@ class AutoPlanRequest(BaseModel):
     goal: str = Field(..., min_length=1)
     brief: Optional[str] = None
     script_id: Optional[str] = None
-    selected_doc_id: Optional[str] = None
     top_k: int = Field(default=3, ge=1, le=20)
 
 
