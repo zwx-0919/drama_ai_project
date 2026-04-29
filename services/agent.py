@@ -79,29 +79,52 @@ class ReActDramaAgent:
     def _normalize_history(self, history: list[dict[str, str]]) -> list[dict[str, str]]:
         return [item for item in history if item.get("role") in {"user", "assistant"} and item.get("content")]
 
+    def _recent_history(self, history: list[dict[str, str]], limit: int = 3) -> list[dict[str, str]]:
+        return history[-limit:] if history else []
+
+    def _history_summary(self, history: list[dict[str, str]]) -> str:
+        if not history:
+            return "无历史摘要"
+        summary = self.engine.compress_memory(history)
+        parts = []
+        if summary.get("worldview"):
+            parts.append(f"世界观/人设：{summary['worldview']}")
+        if summary.get("character_state"):
+            parts.append(f"人物状态：{summary['character_state']}")
+        if summary.get("plot_progress"):
+            parts.append(f"剧情进度：{summary['plot_progress']}")
+        if summary.get("pending_tasks"):
+            parts.append(f"待办事项：{summary['pending_tasks']}")
+        return "；".join(parts) or "无历史摘要"
+
     def _last_assistant_script(self, history: list[dict[str, str]]) -> str:
         for item in reversed(history):
             if item.get("role") == "assistant" and item.get("content"):
                 return item["content"]
         return ""
 
-    def _observe_search(self, user_id: str, brief: str, top_k: int) -> tuple[list[dict[str, Any]], AgentStep]:
+    def _observe_search(self, user_id: str, brief: str, top_k: int, drama_id: str | None = None) -> tuple[list[dict[str, Any]], AgentStep]:
         start = perf_counter()
-        results = self.rag.search(user_id, brief, top_k=top_k)
-        return results, AgentStep(action="observe", reason="检索与目标最相关的历史内容，作为生成上下文。", tool="rag.search", input={"user_id": user_id, "query": brief, "top_k": top_k}, output={"results": results}, latency_ms=(perf_counter() - start) * 1000)
+        results = self.rag.search(user_id, drama_id or brief, brief, top_k=top_k)
+        return results, AgentStep(action="observe", reason="检索与目标最相关的历史内容，作为生成上下文。", tool="rag.search", input={"user_id": user_id, "query": brief, "top_k": top_k, "drama_id": drama_id}, output={"results": results}, latency_ms=(perf_counter() - start) * 1000)
 
-    def _build_context(self, user_id: str, brief: str, top_k: int) -> tuple[str, list[AgentStep], list[dict[str, str]], list[dict[str, Any]]]:
-        history = self._normalize_history(self.memory_service.get_messages(user_id))
-        recent_docs = self.rag.get_recent_documents(user_id, limit=5)
-        search_results, search_step = self._observe_search(user_id, brief, top_k)
+    def _build_context(self, user_id: str, brief: str, top_k: int, drama_id: str | None = None) -> tuple[str, list[AgentStep], list[dict[str, str]], list[dict[str, Any]], str]:
+        history = self._normalize_history(self.memory_service.get_messages(user_id, project_id=drama_id or "project_001"))
+        recent_history = self._recent_history(history, limit=3)
+        recent_docs = self.rag.get_recent_documents(user_id, drama_id=drama_id, limit=5)
+        summary = self.memory_service.get_summary(user_id, project_id=drama_id or "project_001")
+        summary_text = self._history_summary(summary)
+        search_results, search_step = self._observe_search(user_id, brief, top_k, drama_id=drama_id)
         context_parts = [brief]
+        if summary_text and summary_text != "无历史摘要":
+            context_parts.insert(0, f"[历史摘要] {summary_text}")
         if recent_docs:
             context_parts.insert(0, "\n".join(f"[上传文件] {item.get('doc_id')}: {item.get('preview', '')}" for item in recent_docs))
-        if history:
-            context_parts.extend([item["content"] for item in history[-6:]])
+        if recent_history:
+            context_parts.extend([item["content"] for item in recent_history])
         if search_results:
             context_parts.insert(0, search_results[0].get("content", ""))
-        return "\n\n".join(part for part in context_parts if part), [search_step], history, recent_docs
+        return "\n\n".join(part for part in context_parts if part), [search_step], history, recent_docs, summary_text
 
     def _thinking(self, step: AgentStep) -> str:
         return f"{step.action}: {step.reason}"
@@ -174,7 +197,7 @@ Final: <final answer>
                 return {"input": raw_input}
         return {"input": raw_input}
 
-    def _build_tools(self, user_id: str, context: str, top_k: int) -> dict[str, Tool]:
+    def _build_tools(self, user_id: str, context: str, top_k: int, drama_id: str | None = None) -> dict[str, Tool]:
         def generate_script_tool(raw_input: str) -> str:
             data = self._coerce_json(raw_input)
             params = data.get("params") or self._extract_generation_params(data.get("goal", raw_input))
@@ -203,7 +226,7 @@ Final: <final answer>
         def similar_tool(raw_input: str) -> str:
             data = self._coerce_json(raw_input)
             instruction = data.get("instruction", raw_input)
-            reference = data.get("reference") or self.rag.get_retriever_context(user_id, instruction, top_k=top_k)
+            reference = data.get("reference") or self.rag.get_retriever_context(user_id, drama_id or instruction, instruction, top_k=top_k)
             return self.engine.generate_similar_script(instruction, reference or context)
 
         def meta_tool(raw_input: str) -> str:
@@ -214,12 +237,12 @@ Final: <final answer>
 
         def search_tool(raw_input: str) -> str:
             data = self._coerce_json(raw_input)
-            results = self.rag.search(user_id, data.get("query", raw_input), top_k=top_k)
+            results = self.rag.search(user_id, drama_id or data.get("query", raw_input), data.get("query", raw_input), top_k=top_k)
             return self._safe_json(results)
 
         def general_tool(raw_input: str) -> str:
             data = self._coerce_json(raw_input)
-            return self.engine.generate_reply(data.get("message", raw_input), self.memory_service.get_messages(user_id), extra_context=context)
+            return self.engine.generate_reply(data.get("message", raw_input), self.memory_service.get_messages(user_id, project_id=drama_id or "project_001"), extra_context=context)
 
         tools = {
             "generate_script": Tool(name="generate_script", func=generate_script_tool, description="生成完整短剧剧本。输入 JSON: {goal, params}."),
@@ -248,9 +271,9 @@ Final: <final answer>
         meta = f"是否使用文档: {bool(selected_content)}\n文档ID: {selected_doc_id or 'None'}\n文档前100字预览: {preview or 'None'}\n查询: {brief}"
         return selected_content, meta
 
-    def _run_react_agent(self, user_id: str, message: str, context: str, top_k: int, context_meta: str) -> tuple[str, list[AgentStep]]:
+    def _run_react_agent(self, user_id: str, message: str, context: str, top_k: int, context_meta: str, drama_id: str | None = None) -> tuple[str, list[AgentStep]]:
         llm = self._build_react_llm()
-        tools = self._build_tools(user_id, context, top_k)
+        tools = self._build_tools(user_id, context, top_k, drama_id=drama_id)
         tool_list = "\n".join(f"- {tool.name}: {tool.description}" for tool in tools.values())
         prompt = self._build_react_prompt()
         scratchpad = ""
@@ -276,13 +299,13 @@ Final: <final answer>
             scratchpad += f"{text}\nObservation: {observation}\n"
         return scratchpad.strip(), steps
 
-    def _finalize_memory(self, user_id: str, user_text: str, assistant_text: str) -> None:
-        self.memory_service.add_user_message(user_id, user_text)
-        self.memory_service.add_ai_message(user_id, assistant_text)
+    def _finalize_memory(self, user_id: str, user_text: str, assistant_text: str, project_id: str | None = None) -> None:
+        self.memory_service.add_user_message(user_id, user_text, project_id=project_id)
+        self.memory_service.add_ai_message(user_id, assistant_text, project_id=project_id)
 
     def _run_task(self, user_id: str, task_type: str, instruction: str, content: str, top_k: int, script_id: str | None, selected_doc_id: str | None = None) -> dict[str, Any]:
         brief = instruction or content
-        context, search_steps, history, recent_docs = self._build_context(user_id, brief, top_k)
+        context, search_steps, history, recent_docs, summary_text = self._build_context(user_id, brief, top_k, drama_id=script_id)
         doc_content, context_meta = self._doc_context_meta(selected_doc_id, recent_docs, user_id, brief)
         if doc_content:
             context = doc_content
@@ -295,7 +318,7 @@ Final: <final answer>
 
         if task_type == "search":
             started_at = perf_counter()
-            results = self.rag.search(user_id, brief, top_k=top_k)
+            results = self.rag.search(user_id, script_id or brief, brief, top_k=top_k)
             final_result = {"mode": "search", "results": results}
             steps.append(self._make_step("act", "执行语义检索并返回结果。", "rag.search", {"brief": brief, "top_k": top_k}, {"result_count": len(results)}, started_at))
             payload = self._format_output(task_type, steps, final_result, "auto_plan_context", started_at)
@@ -304,25 +327,25 @@ Final: <final answer>
 
         started_at = perf_counter()
         if task_type == "similar":
-            text, agent_steps = self._run_react_agent(user_id, json.dumps({"instruction": instruction or content or brief, "reference": self.rag.get_retriever_context(user_id, brief, top_k=top_k) or context}, ensure_ascii=False), context, top_k, context_meta)
+            text, agent_steps = self._run_react_agent(user_id, json.dumps({"instruction": instruction or content or brief, "reference": self.rag.get_retriever_context(user_id, script_id or brief, brief, top_k=top_k) or context}, ensure_ascii=False), context, top_k, context_meta, drama_id=script_id)
             final_result = {"mode": "similar", "content": text}
         elif task_type == "rewrite":
-            text, agent_steps = self._run_react_agent(user_id, json.dumps({"content": context, "instruction": instruction or brief}, ensure_ascii=False), context, top_k, context_meta)
+            text, agent_steps = self._run_react_agent(user_id, json.dumps({"content": context, "instruction": instruction or brief}, ensure_ascii=False), context, top_k, context_meta, drama_id=script_id)
             final_result = {"mode": "rewrite", "content": text}
         elif task_type == "continue":
-            text, agent_steps = self._run_react_agent(user_id, json.dumps({"content": context}, ensure_ascii=False), context, top_k, context_meta)
+            text, agent_steps = self._run_react_agent(user_id, json.dumps({"content": context}, ensure_ascii=False), context, top_k, context_meta, drama_id=script_id)
             final_result = {"mode": "continue", "content": text}
         elif task_type == "expand":
-            text, agent_steps = self._run_react_agent(user_id, json.dumps({"content": context}, ensure_ascii=False), context, top_k, context_meta)
+            text, agent_steps = self._run_react_agent(user_id, json.dumps({"content": context}, ensure_ascii=False), context, top_k, context_meta, drama_id=script_id)
             final_result = {"mode": "expand", "content": text}
         elif task_type == "shorten":
-            text, agent_steps = self._run_react_agent(user_id, json.dumps({"content": context}, ensure_ascii=False), context, top_k, context_meta)
+            text, agent_steps = self._run_react_agent(user_id, json.dumps({"content": context}, ensure_ascii=False), context, top_k, context_meta, drama_id=script_id)
             final_result = {"mode": "shorten", "content": text}
         elif task_type == "shot":
-            text, agent_steps = self._run_react_agent(user_id, json.dumps({"content": context}, ensure_ascii=False), context, top_k, context_meta)
+            text, agent_steps = self._run_react_agent(user_id, json.dumps({"content": context}, ensure_ascii=False), context, top_k, context_meta, drama_id=script_id)
             final_result = {"mode": "shot", "content": text}
         elif task_type == "meta":
-            text, agent_steps = self._run_react_agent(user_id, json.dumps({"content": context}, ensure_ascii=False), context, top_k, context_meta)
+            text, agent_steps = self._run_react_agent(user_id, json.dumps({"content": context}, ensure_ascii=False), context, top_k, context_meta, drama_id=script_id)
             try:
                 meta = json.loads(text)
             except Exception:
@@ -330,21 +353,21 @@ Final: <final answer>
             final_result = {"mode": "meta", **meta}
         elif task_type == "auto_generate":
             params = self._extract_generation_params(brief)
-            text, agent_steps = self._run_react_agent(user_id, json.dumps({"goal": brief, "params": params}, ensure_ascii=False), context, top_k, context_meta)
+            text, agent_steps = self._run_react_agent(user_id, json.dumps({"goal": brief, "params": params}, ensure_ascii=False), context, top_k, context_meta, drama_id=script_id)
             final_result = {"mode": "auto_generate", "content": text, "params": params}
         else:
-            text, agent_steps = self._run_react_agent(user_id, json.dumps({"message": instruction or content or brief}, ensure_ascii=False), context, top_k, context_meta)
+            text, agent_steps = self._run_react_agent(user_id, json.dumps({"message": instruction or content or brief}, ensure_ascii=False), context, top_k, context_meta, drama_id=script_id)
             final_result = {"mode": "general", "content": text}
 
         steps.extend(agent_steps)
         if final_result.get("content"):
-            self._finalize_memory(user_id, instruction or content or brief, final_result.get("content", ""))
+            self._finalize_memory(user_id, instruction or content or brief, final_result.get("content", ""), project_id=script_id)
             if script_id:
                 self.rag.upsert_script(user_id, script_id, final_result.get("content", ""))
         if recent_docs:
             final_result["document_context"] = f"最近上传文档：{', '.join(item.get('doc_id', '') for item in recent_docs if item.get('doc_id'))}"
         payload = self._format_output(task_type, steps, final_result, "auto_plan_context", started_at)
-        payload.update({"goal": brief, "task_type": task_type, "script_id": script_id, "selected_doc_id": selected_doc_id})
+        payload.update({"goal": brief, "task_type": task_type, "script_id": script_id, "selected_doc_id": selected_doc_id, "history_summary": summary_text})
         return payload
 
     def execute_tool(self, user_id: str, intent: str, instruction: str = "", content: str = "", script_id: str | None = None, top_k: int = 3, selected_doc_id: str | None = None) -> dict[str, Any]:

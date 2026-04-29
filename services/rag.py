@@ -5,6 +5,7 @@ import json
 import math
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 try:
@@ -37,7 +38,11 @@ from utils.text import split_text
 
 @dataclass
 class SearchResult:
-    script_id: str
+    drama_id: str
+    episode: str
+    role: str
+    plot_type: str
+    create_time: str
     content: str
     score: float
     user_id: str
@@ -45,8 +50,6 @@ class SearchResult:
 
 
 class RAGService:
-    """Redis-backed cache + Milvus vector store service."""
-
     def __init__(
         self,
         milvus_uri: str = "http://localhost:19530",
@@ -63,6 +66,9 @@ class RAGService:
         self._text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=150) if RecursiveCharacterTextSplitter is not None else None
         self._connect_milvus(milvus_uri)
         self._legacy_memory: dict[str, dict[str, str]] = {}
+
+    def _now(self) -> str:
+        return datetime.now(timezone.utc).isoformat()
 
     def _connect_milvus(self, milvus_uri: str) -> None:
         if not self._milvus_ready:
@@ -81,7 +87,11 @@ class RAGService:
             fields = [
                 FieldSchema(name="id", dtype=DataType.INT64, is_primary=True, auto_id=True),
                 FieldSchema(name="user_id", dtype=DataType.VARCHAR, max_length=128),
-                FieldSchema(name="script_id", dtype=DataType.VARCHAR, max_length=256),
+                FieldSchema(name="drama_id", dtype=DataType.VARCHAR, max_length=128),
+                FieldSchema(name="episode", dtype=DataType.VARCHAR, max_length=64),
+                FieldSchema(name="role", dtype=DataType.VARCHAR, max_length=128),
+                FieldSchema(name="plot_type", dtype=DataType.VARCHAR, max_length=64),
+                FieldSchema(name="create_time", dtype=DataType.VARCHAR, max_length=64),
                 FieldSchema(name="content", dtype=DataType.VARCHAR, max_length=65535),
                 FieldSchema(name="embedding", dtype=DataType.FLOAT_VECTOR, dim=self.embedding_dim),
             ]
@@ -126,7 +136,7 @@ class RAGService:
         return [v / norm for v in vec]
 
     def _serialize_result(self, result: SearchResult) -> dict[str, Any]:
-        return {"script_id": result.script_id, "content": result.content, "score": result.score, "user_id": result.user_id, "source": result.source}
+        return result.__dict__
 
     def _to_document(self, content: str, metadata: dict[str, Any]) -> Any:
         if Document is None:
@@ -152,38 +162,50 @@ class RAGService:
     def _redis_get(self, key: str) -> str:
         return self._redis.get(key) if self._redis else ""
 
-    def upsert_script(self, user_id: str, script_id: str, content: str) -> None:
-        content_key = self._redis_key("content", user_id, script_id)
-        self._redis_set(content_key, content)
+    def _normalize_tags(self, drama_id: str, episode: str | None, role: str | None, plot_type: str | None, create_time: str | None) -> dict[str, str]:
+        return {
+            "drama_id": drama_id,
+            "episode": episode or "episode_001",
+            "role": role or "unknown",
+            "plot_type": plot_type or "general",
+            "create_time": create_time or self._now(),
+        }
+
+    def upsert_script(self, user_id: str, script_id: str, content: str, episode: str | None = None, role: str | None = None, plot_type: str | None = None, create_time: str | None = None) -> None:
+        tags = self._normalize_tags(script_id, episode, role, plot_type, create_time)
+        self._redis_set(self._redis_key("content", user_id, script_id), content)
+        self._redis_set(self._redis_key("meta", user_id, script_id), json.dumps(tags, ensure_ascii=False))
         if self._collection is not None:
-            self._collection.insert([[user_id], [script_id], [content], [self._embed(content)]])
+            self._collection.insert([[user_id], [tags["drama_id"]], [tags["episode"]], [tags["role"]], [tags["plot_type"]], [tags["create_time"]], [content], [self._embed(content)]])
             self._collection.flush()
         else:
             self._legacy_memory.setdefault(user_id, {})[script_id] = content
 
-    def add_document(self, user_id: str, doc_id: str, content: str, chunk_size: int = 1000, overlap: int = 150) -> int:
+    def add_document(self, user_id: str, doc_id: str, content: str, chunk_size: int = 1000, overlap: int = 150, drama_id: str | None = None, episode: str | None = None, role: str | None = None, plot_type: str | None = None) -> int:
+        drama_id = drama_id or doc_id
         chunks = self._split_content(content, chunk_size=chunk_size, overlap=overlap)
-        documents = [self._to_document(chunk, {"user_id": user_id, "doc_id": doc_id, "chunk_index": idx + 1}) for idx, chunk in enumerate(chunks)]
+        documents = [self._to_document(chunk, {"user_id": user_id, "doc_id": doc_id, "chunk_index": idx + 1, "drama_id": drama_id, "episode": episode or f"episode_{idx + 1:03d}", "role": role or "unknown", "plot_type": plot_type or "general", "create_time": self._now()}) for idx, chunk in enumerate(chunks)]
         for doc in documents:
             metadata = doc.metadata if hasattr(doc, "metadata") else doc.get("metadata", {})
             chunk_index = metadata.get("chunk_index", 1)
             chunk_content = doc.page_content if hasattr(doc, "page_content") else doc.get("page_content", "")
-            self.upsert_script(user_id, f"{doc_id}-chunk-{chunk_index}", chunk_content)
+            self.upsert_script(user_id, f"{doc_id}-chunk-{chunk_index}", chunk_content, episode=metadata.get("episode"), role=metadata.get("role"), plot_type=metadata.get("plot_type"), create_time=metadata.get("create_time"),)
         if self._redis:
-            doc_payload = {"doc_id": doc_id, "chunks": len(chunks), "content": content, "preview": content[:800]}
-            self._redis_set(self._redis_key("doc", user_id, doc_id), json.dumps(doc_payload, ensure_ascii=False))
-            recent_key = self._redis_key("docs", user_id)
+            doc_payload = {"doc_id": doc_id, "drama_id": drama_id, "chunks": len(chunks), "content": content, "preview": content[:800]}
+            self._redis_set(self._redis_key("doc", user_id, drama_id, doc_id), json.dumps(doc_payload, ensure_ascii=False))
+            recent_key = self._redis_key("docs", user_id, drama_id)
             recent = self._cache_get_json(recent_key) or []
             recent = [item for item in recent if item.get("doc_id") != doc_id]
-            recent.insert(0, {"doc_id": doc_id, "chunks": len(chunks), "preview": content[:200]})
+            recent.insert(0, {"doc_id": doc_id, "drama_id": drama_id, "chunks": len(chunks), "preview": content[:200]})
             self._cache_set_json(recent_key, recent[:10], ttl=86400)
         else:
             self._legacy_memory.setdefault(user_id, {})[doc_id] = content
         return len(chunks)
 
-    def get_document_content(self, user_id: str, doc_id: str) -> str:
+    def get_document_content(self, user_id: str, doc_id: str, drama_id: str | None = None) -> str:
+        drama_id = drama_id or doc_id
         if self._redis:
-            payload = self._redis_get(self._redis_key("doc", user_id, doc_id))
+            payload = self._redis_get(self._redis_key("doc", user_id, drama_id, doc_id))
             if payload:
                 try:
                     data = json.loads(payload)
@@ -192,45 +214,56 @@ class RAGService:
                     pass
         return self._legacy_memory.get(user_id, {}).get(doc_id, "")
 
-    def get_recent_documents(self, user_id: str, limit: int = 5) -> list[dict[str, Any]]:
+    def get_recent_documents(self, user_id: str, drama_id: str | None = None, limit: int = 5) -> list[dict[str, Any]]:
         if self._redis:
-            items = self._cache_get_json(self._redis_key("docs", user_id)) or []
+            key = self._redis_key("docs", user_id, drama_id or "default")
+            items = self._cache_get_json(key) or []
             return list(items)[:limit]
         items = self._legacy_memory.get(user_id, {})
         return [{"doc_id": doc_id, "chunks": 1, "preview": content[:200]} for doc_id, content in list(items.items())[:limit]]
 
-    def _search_milvus(self, user_id: str, query: str, top_k: int = 3) -> list[dict[str, Any]]:
+    def _build_expr(self, user_id: str, drama_id: str, episode: str | None = None, role: str | None = None, plot_type: str | None = None) -> str:
+        parts = [f'user_id == "{user_id}"', f'drama_id == "{drama_id}"']
+        if episode:
+            parts.append(f'episode == "{episode}"')
+        if role:
+            parts.append(f'role == "{role}"')
+        if plot_type:
+            parts.append(f'plot_type == "{plot_type}"')
+        return " and ".join(parts)
+
+    def _search_milvus(self, user_id: str, drama_id: str, query: str, top_k: int = 3, episode: str | None = None, role: str | None = None, plot_type: str | None = None) -> list[dict[str, Any]]:
         results: list[dict[str, Any]] = []
         if self._collection is not None:
             try:
                 search_params = {"metric_type": "COSINE", "params": {"nprobe": 10}}
                 self._collection.load()
-                rows = self._collection.search(data=[self._embed(query)], anns_field="embedding", param=search_params, limit=top_k, expr=f'user_id == "{user_id}"', output_fields=["user_id", "script_id", "content"])
+                rows = self._collection.search(data=[self._embed(query)], anns_field="embedding", param=search_params, limit=top_k, expr=self._build_expr(user_id, drama_id, episode=episode, role=role, plot_type=plot_type), output_fields=["user_id", "drama_id", "episode", "role", "plot_type", "create_time", "content"])
                 for hit in rows[0]:
                     entity = hit.entity
-                    results.append(self._serialize_result(SearchResult(user_id=entity.get("user_id"), script_id=entity.get("script_id"), content=entity.get("content"), score=float(hit.score))))
+                    results.append(self._serialize_result(SearchResult(user_id=entity.get("user_id"), drama_id=entity.get("drama_id"), episode=entity.get("episode"), role=entity.get("role"), plot_type=entity.get("plot_type"), create_time=entity.get("create_time"), content=entity.get("content"), score=float(hit.score),)))
             except Exception:
                 return []
         else:
             items = self._legacy_memory.get(user_id, {})
             ranked = sorted(items.items(), key=lambda item: query.lower() not in item[1].lower())[:top_k]
-            results = [self._serialize_result(SearchResult(user_id=user_id, script_id=script_id, content=content, score=1.0, source="local")) for script_id, content in ranked]
+            results = [self._serialize_result(SearchResult(user_id=user_id, drama_id=drama_id, episode=episode or "episode_001", role=role or "unknown", plot_type=plot_type or "general", create_time=self._now(), content=content, score=1.0, source="local")) for script_id, content in ranked]
         return results
 
-    def search(self, user_id: str, query: str, top_k: int = 3) -> list[dict[str, Any]]:
-        cache_key = self._redis_key("search", user_id, hashlib.sha256(query.encode("utf-8")).hexdigest(), str(top_k))
+    def search(self, user_id: str, drama_id: str, query: str, top_k: int = 3, episode: str | None = None, role: str | None = None, plot_type: str | None = None) -> list[dict[str, Any]]:
+        cache_key = self._redis_key("search", user_id, drama_id, hashlib.sha256(query.encode("utf-8")).hexdigest(), str(top_k), episode or "any", role or "any", plot_type or "any")
         cached = self._cache_get_json(cache_key)
         if cached is not None:
             return cached
-        results = self._search_milvus(user_id, query, top_k=top_k)
+        results = self._search_milvus(user_id, drama_id, query, top_k=top_k, episode=episode, role=role, plot_type=plot_type)
         self._cache_set_json(cache_key, results, ttl=300)
         return results
 
-    def retrieve(self, user_id: str, query: str, top_k: int = 3) -> list[dict[str, Any]]:
-        return self.search(user_id, query, top_k=top_k)
+    def retrieve(self, user_id: str, drama_id: str, query: str, top_k: int = 3, episode: str | None = None, role: str | None = None, plot_type: str | None = None) -> list[dict[str, Any]]:
+        return self.search(user_id, drama_id, query, top_k=top_k, episode=episode, role=role, plot_type=plot_type)
 
-    def get_retriever_context(self, user_id: str, query: str, top_k: int = 3) -> str:
-        results = self.retrieve(user_id, query, top_k=top_k)
+    def get_retriever_context(self, user_id: str, drama_id: str, query: str, top_k: int = 3, episode: str | None = None, role: str | None = None, plot_type: str | None = None) -> str:
+        results = self.retrieve(user_id, drama_id, query, top_k=top_k, episode=episode, role=role, plot_type=plot_type)
         return "\n\n".join(item.get("content", "") for item in results if item.get("content"))
 
     def get_script(self, user_id: str, script_id: str) -> str:
@@ -241,7 +274,7 @@ class RAGService:
                 return cached
         if self._collection is not None:
             try:
-                expr = f'user_id == "{user_id}" and script_id == "{script_id}"'
+                expr = f'user_id == "{user_id}" and drama_id == "{script_id}"'
                 rows = self._collection.query(expr=expr, output_fields=["content"], limit=1)
                 if rows:
                     content = rows[0].get("content", "")

@@ -6,6 +6,7 @@ from core.config import get_settings
 from services.agent import ReActDramaAgent
 from services.llm import ScriptEngine
 from services.memory import RedisChatMessageHistory
+from services.minio_storage import MinioStorage
 from services.rag import RAGService
 
 
@@ -35,6 +36,18 @@ def get_memory_service() -> RedisChatMessageHistory:
 def get_script_engine() -> ScriptEngine:
     settings = get_settings()
     return ScriptEngine(api_key=settings.api_key, model_name=settings.llm_model)
+
+
+@lru_cache
+def get_minio_storage() -> MinioStorage:
+    settings = get_settings()
+    return MinioStorage(
+        endpoint=settings.minio_endpoint,
+        access_key=settings.minio_access_key,
+        secret_key=settings.minio_secret_key,
+        bucket_name=settings.minio_bucket,
+        secure=settings.minio_secure,
+    )
 
 
 @lru_cache

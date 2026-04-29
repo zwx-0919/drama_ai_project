@@ -12,7 +12,6 @@ from langchain_openai import ChatOpenAI
 
 @dataclass
 class ScriptEngine:
-    # 自动从环境变量读取
     api_key: str = os.getenv("DASHSCOPE_API_KEY", "")
     model_name: str = "qwen-max"
 
@@ -26,26 +25,55 @@ class ScriptEngine:
         }
         return templates.get(style, "情节推进、人物成长、情绪落点")
 
-    def _lc_model(self) -> ChatOpenAI:
+    def _lc_model(self, temperature: float = 0.7) -> ChatOpenAI:
         return ChatOpenAI(
             model=self.model_name,
             api_key=self.api_key,
             base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-            temperature=0.7,
+            temperature=temperature,
         )
 
-    def _build_chain(self, system_prompt: str):
+    def _build_chain(self, system_prompt: str, temperature: float = 0.7):
         prompt = ChatPromptTemplate.from_messages(
             [
                 ("system", system_prompt),
                 ("human", "{input}"),
             ]
         )
-        return prompt | self._lc_model() | StrOutputParser()
+        return prompt | self._lc_model(temperature=temperature) | StrOutputParser()
 
     @staticmethod
     def _build_input(*parts: str) -> str:
         return "\n".join(part for part in parts if part)
+
+    def compress_memory(self, history: list[dict[str, str]]) -> dict[str, str]:
+        if not history:
+            return {"worldview": "", "character_state": "", "plot_progress": "", "pending_tasks": ""}
+        text = "\n".join(f"{item.get('role', '')}：{item.get('content', '')}" for item in history if item.get("content"))
+        chain = self._build_chain(
+            """
+你是短剧项目记忆压缩助手。
+请把给定对话压缩成结构化摘要，且严格输出 JSON，字段必须固定为：worldview、character_state、plot_progress、pending_tasks。
+要求：
+1. worldview：已确认的世界观、题材、创作风格；
+2. character_state：已确定的人物设定、主要角色状态；
+3. plot_progress：已完成的关键剧情节点、已写内容；
+4. pending_tasks：当前待优化、待继续、待处理事项。
+只输出 JSON，不要解释，不要添加多余字段。
+""",
+            temperature=0.2,
+        )
+        raw = chain.invoke({"input": text})
+        try:
+            data = __import__("json").loads(raw)
+            return {
+                "worldview": str(data.get("worldview", "")),
+                "character_state": str(data.get("character_state", "")),
+                "plot_progress": str(data.get("plot_progress", "")),
+                "pending_tasks": str(data.get("pending_tasks", "")),
+            }
+        except Exception:
+            return {"worldview": raw[:120], "character_state": "", "plot_progress": "", "pending_tasks": ""}
 
     def generate_script(self, theme: str, style: str, duration_min: float, keywords: List[str]) -> str:
         keyword_text = "、".join(keywords) or "无"
@@ -76,7 +104,7 @@ class ScriptEngine:
         extra_context: str = "",
     ) -> str:
         history = history or []
-        recent = history[-4:]
+        recent = history[-3:]
         context = "；".join(item.get("content", "") for item in recent) or "无"
         if extra_context:
             context = f"{extra_context}\n{context}" if context != "无" else extra_context

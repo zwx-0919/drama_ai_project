@@ -14,6 +14,11 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     milvus_uri: str = "http://localhost:19530"
     milvus_collection: str = "drama_scripts"
+    minio_endpoint: str = "localhost:9000"
+    minio_access_key: str = "minioadmin"
+    minio_secret_key: str = "minioadmin"
+    minio_bucket: str = "drama-ai"
+    minio_secure: bool = False
     dashscope_api_key: str = Field(default="", alias="DASHSCOPE_API_KEY")
     embedding_model: str = "text-embedding-v4"
     llm_model: str = "qwen-max"

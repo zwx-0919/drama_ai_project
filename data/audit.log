@@ -60,3 +60,4 @@
 {"time": "2026-04-28T07:03:51.026122", "event": "chat_message", "payload": {"user_id": "test-user", "selected_doc_id": "短剧剧本.docx"}}
 {"time": "2026-04-28T08:07:39.457634", "event": "upload_doc", "payload": {"file_name": "短剧剧本.docx", "chunks": 3, "user_id": "test-user"}}
 {"time": "2026-04-28T08:08:25.924801", "event": "chat_message", "payload": {"user_id": "test-user", "selected_doc_id": "短剧剧本.docx"}}
+{"time": "2026-04-29T04:42:14.185442", "event": "upload_doc", "payload": {"file_name": "修改.txt", "chunks": 1, "user_id": "test-user", "storage": "uploads/test-user/89ba8ffdff0ccaef-修改.txt"}}
